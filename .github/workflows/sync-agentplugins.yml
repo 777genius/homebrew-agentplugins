@@ -1,0 +1,41 @@
+name: Sync Agentplugins release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/sync-agentplugins.yml
+      - Formula/agentplugins.rb
+      - scripts/sync-agentplugins-release.sh
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional exact agentplugins-vX.Y.Z release tag
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  attestations: read
+
+concurrency:
+  group: sync-agentplugins-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Verify release provenance and update the formula
+        env:
+          CHECK_ONLY: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: ./scripts/sync-agentplugins-release.sh
