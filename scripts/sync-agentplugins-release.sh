@@ -19,7 +19,22 @@ command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v ruby >/dev/null 2>&1 || fail "ruby is required"
 
 if [[ -z "$TAG" ]]; then
-  TAG="$(gh release view --repo "$SOURCE_REPOSITORY" --json tagName --jq .tagName)"
+  TAG="$(gh release list --repo "$SOURCE_REPOSITORY" --limit 1000 \
+    --json tagName,isDraft,isPrerelease | python3 -c '
+import json
+import re
+import sys
+
+pattern = re.compile(r"^agentplugins-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+candidates = []
+for release in json.load(sys.stdin):
+    match = pattern.fullmatch(str(release.get("tagName", "")))
+    if match and not release.get("isDraft") and not release.get("isPrerelease"):
+        candidates.append((tuple(map(int, match.groups())), release["tagName"]))
+if not candidates:
+    raise SystemExit("no stable Agentplugins release found")
+print(max(candidates)[1])
+')"
 fi
 [[ "$TAG" =~ ^agentplugins-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
   || fail "release tag must be an exact stable agentplugins-vX.Y.Z tag"
