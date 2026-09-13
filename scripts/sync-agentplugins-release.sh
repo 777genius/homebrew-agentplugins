@@ -51,7 +51,8 @@ release_json="$(gh release view "$TAG" --repo "$SOURCE_REPOSITORY" \
 jq -e --arg tag "$TAG" '
   .isDraft == false and .isPrerelease == false and .tagName == $tag and
   ([.assets[].name] | sort) == ([
-    "checksums.txt", "release-manifest.json",
+    "candidate.json", "checksums.txt", "milestone-a-promotion.json",
+    "pair-prepared.json", "release-manifest.json",
     ($tag | sub("^agentplugins-v"; "agentplugins_") + "_darwin_amd64"),
     ($tag | sub("^agentplugins-v"; "agentplugins_") + "_darwin_arm64"),
     ($tag | sub("^agentplugins-v"; "agentplugins_") + "_linux_amd64"),
