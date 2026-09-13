@@ -63,22 +63,83 @@ jq -e --arg tag "$TAG" '
 ' <<<"$release_json" >/dev/null || fail "release assets are incomplete or unexpected"
 
 gh release download "$TAG" --repo "$SOURCE_REPOSITORY" \
-  --pattern release-manifest.json --dir "$TEMP_ROOT"
+  --pattern release-manifest.json \
+  --pattern milestone-a-promotion.json \
+  --pattern checksums.txt \
+  --pattern candidate.json \
+  --pattern pair-prepared.json \
+  --dir "$TEMP_ROOT"
 MANIFEST="$TEMP_ROOT/release-manifest.json"
+PROMOTION="$TEMP_ROOT/milestone-a-promotion.json"
 
-jq -e --arg tag "$TAG" --arg version "$VERSION" '
-  .schema_version == 2 and .tag == $tag and .version == $version and
-  (.commit | test("^[0-9a-f]{40}$")) and
-  (.assets | keys | sort) == ([
+python3 - "$MANIFEST" "$PROMOTION" "$TEMP_ROOT" "$TAG" "$VERSION" <<'PY' \
+  || fail "release manifest or Milestone A promotion record is invalid"
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+promotion_path = Path(sys.argv[2])
+root = Path(sys.argv[3])
+tag, version = sys.argv[4:]
+manifest = json.loads(manifest_path.read_text())
+promotion = json.loads(promotion_path.read_text())
+targets = {
     "darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64",
-    "windows-amd64", "windows-arm64"
-  ] | sort) and
-  all(.assets[];
-    (.file | type == "string") and
-    (.sha256 | test("^[0-9a-f]{64}$")) and
-    (.size | type == "number" and . > 0)
-  )
-' "$MANIFEST" >/dev/null || fail "release manifest is invalid"
+    "windows-amd64", "windows-arm64",
+}
+sha256 = re.compile(r"[0-9a-f]{64}").fullmatch
+commit = re.compile(r"[0-9a-f]{40}").fullmatch
+
+def digest(name):
+    return hashlib.sha256((root / name).read_bytes()).hexdigest()
+
+assert manifest["schema_version"] == 3
+assert manifest["status"] == "CANDIDATE"
+assert manifest["product"] == "agentplugins"
+assert manifest["repository"] == "777genius/universal-agent-plugins"
+assert manifest["tag"] == tag and manifest["version"] == version
+assert commit(manifest["commit"]) and manifest["engine_revision"] == manifest["commit"]
+assert manifest["versions"]["agentplugins"] == version
+assert re.fullmatch(r"2\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", manifest["versions"]["plugin-kit-ai"])
+assert manifest["authoring_mode"] == "release-cli-contract-v1"
+assert manifest["asset_scope"] == "six-platform-pair"
+assert manifest["release_eligible"] is False
+assert manifest["platform_acceptance"] is False
+assert manifest["attested"] is False
+assert set(manifest["assets"]) == targets
+for target, asset in manifest["assets"].items():
+    platform, cpu = target.split("-")
+    suffix = ".exe" if platform == "windows" else ""
+    assert asset["file"] == f"agentplugins_{version}_{platform}_{cpu}{suffix}"
+    assert isinstance(asset["file"], str) and sha256(asset["sha256"])
+    assert isinstance(asset["size"], int) and asset["size"] > 0
+
+identity = promotion["identity"]
+assert promotion["schema"] == "milestone-a-promotion/v1"
+assert identity["repository"] == manifest["repository"]
+assert identity["commit"] == manifest["commit"]
+assert identity["engine_revision"] == manifest["engine_revision"]
+assert identity["versions"] == manifest["versions"]
+assert promotion["authoring_mode"] == manifest["authoring_mode"]
+assert promotion["asset_scope"] == manifest["asset_scope"]
+agent = promotion["products"]["agentplugins"]
+kit = promotion["products"]["plugin-kit-ai"]
+assert agent["tag"] == tag
+assert kit["tag"] == f'plugin-kit-ai-v{identity["versions"]["plugin-kit-ai"]}'
+assert agent["assets"] == manifest["assets"]
+assert agent["manifest_sha256"] == digest("release-manifest.json")
+assert agent["checksums_sha256"] == digest("checksums.txt")
+assert promotion["candidate_sha256"] == digest("candidate.json")
+assert promotion["pair_marker_sha256"] == digest("pair-prepared.json")
+assert promotion["signer"] == {
+    "workflow": ".github/workflows/agentplugins-release.yml",
+    "source": manifest["commit"],
+}
+assert promotion["milestone_a"]["workflow"] == ".github/workflows/authoring-milestone-a-e2e.yml"
+PY
 
 COMMIT="$(jq -r .commit "$MANIFEST")"
 TAG_COMMIT="$(gh api "repos/${SOURCE_REPOSITORY}/commits/${TAG}" --jq .sha)"
@@ -86,8 +147,19 @@ TAG_COMMIT="$(gh api "repos/${SOURCE_REPOSITORY}/commits/${TAG}" --jq .sha)"
 gh attestation verify "$MANIFEST" \
   --repo "$SOURCE_REPOSITORY" \
   --signer-workflow "github.com/${SOURCE_REPOSITORY}/.github/workflows/agentplugins-release.yml" \
-  --source-digest "$COMMIT" >/dev/null \
+  --source-digest "$COMMIT" \
+  --source-ref "refs/tags/${TAG}" \
+  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --deny-self-hosted-runners >/dev/null \
   || fail "release manifest attestation verification failed"
+gh attestation verify "$PROMOTION" \
+  --repo "$SOURCE_REPOSITORY" \
+  --signer-workflow "github.com/${SOURCE_REPOSITORY}/.github/workflows/agentplugins-release.yml" \
+  --source-digest "$COMMIT" \
+  --source-ref "refs/tags/${TAG}" \
+  --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+  --deny-self-hosted-runners >/dev/null \
+  || fail "Milestone A promotion attestation verification failed"
 
 FORMULA="$TEMP_ROOT/agentplugins.rb"
 python3 - "$MANIFEST" "$FORMULA" <<'PY'
