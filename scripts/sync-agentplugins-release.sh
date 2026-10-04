@@ -48,6 +48,63 @@ trap cleanup EXIT HUP INT TERM
 
 release_json="$(gh release view "$TAG" --repo "$SOURCE_REPOSITORY" \
   --json isDraft,isPrerelease,tagName,assets)"
+# The current standalone CLI uses schema-v2 assets. Keep the paired authoring
+# contract below separate; its qualification does not describe this release.
+asset_names="$(jq -c '[.assets[].name] | sort' <<<"$release_json")"
+if jq -e 'index("THIRD_PARTY_NOTICES.txt") != null' <<<"$asset_names" >/dev/null; then
+  jq -e --arg tag "$TAG" '
+    .isDraft == false and .isPrerelease == false and .tagName == $tag and
+    ([.assets[].name] | sort) == ([
+      "checksums.txt", "release-manifest.json", "THIRD_PARTY_NOTICES.txt",
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_darwin_amd64"),
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_darwin_arm64"),
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_linux_amd64"),
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_linux_arm64"),
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_windows_amd64.exe"),
+      ($tag | sub("^agentplugins-v"; "agentplugins_") + "_windows_arm64.exe")
+    ] | sort)
+  ' <<<"$release_json" >/dev/null || fail "unexpected standalone release assets"
+  gh release download "$TAG" --repo "$SOURCE_REPOSITORY" \
+    --pattern release-manifest.json --pattern checksums.txt \
+    --pattern THIRD_PARTY_NOTICES.txt --dir "$TEMP_ROOT"
+  MANIFEST="$TEMP_ROOT/release-manifest.json"
+  python3 - "$TEMP_ROOT" "$TAG" "$VERSION" <<'PY' || fail "invalid standalone release manifest"
+import hashlib, json, re, sys
+from pathlib import Path
+root, tag, version = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+manifest = json.loads((root / "release-manifest.json").read_text())
+assert set(manifest) == {"schema_version", "tag", "version", "commit", "assets"}
+assert manifest["schema_version"] == 2 and manifest["tag"] == tag and manifest["version"] == version
+assert re.fullmatch(r"[0-9a-f]{40}", manifest["commit"])
+targets = {"darwin-amd64", "darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64", "windows-arm64"}
+assert set(manifest["assets"]) == targets
+checksums = {}
+for line in (root / "checksums.txt").read_text().splitlines():
+    match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+    assert match and match[2] not in checksums
+    checksums[match[2]] = match[1]
+expected = {"release-manifest.json", "THIRD_PARTY_NOTICES.txt"}
+for target, asset in manifest["assets"].items():
+    platform, cpu = target.split("-")
+    name = f"agentplugins_{version}_{platform}_{cpu}" + (".exe" if platform == "windows" else "")
+    assert set(asset) == {"file", "sha256", "size"} and asset["file"] == name
+    assert type(asset["size"]) is int and asset["size"] > 0
+    assert re.fullmatch(r"[0-9a-f]{64}", asset["sha256"]) and checksums[name] == asset["sha256"]
+    expected.add(name)
+assert set(checksums) == expected
+for name in ("release-manifest.json", "THIRD_PARTY_NOTICES.txt"):
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == checksums[name]
+PY
+  COMMIT="$(jq -r .commit "$MANIFEST")"
+  TAG_COMMIT="$(gh api "repos/${SOURCE_REPOSITORY}/commits/${TAG}" --jq .sha)"
+  [[ "$TAG_COMMIT" == "$COMMIT" ]] || fail "standalone release tag/source mismatch"
+  for file in release-manifest.json checksums.txt THIRD_PARTY_NOTICES.txt; do
+    gh attestation verify "$TEMP_ROOT/$file" --repo "$SOURCE_REPOSITORY" \
+      --signer-workflow "github.com/${SOURCE_REPOSITORY}/.github/workflows/agentplugins-release.yml" \
+      --source-digest "$COMMIT" --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+      --deny-self-hosted-runners >/dev/null || fail "standalone release attestation failed: $file"
+  done
+else
 jq -e --arg tag "$TAG" '
   .isDraft == false and .isPrerelease == false and .tagName == $tag and
   ([.assets[].name] | sort) == ([
@@ -161,8 +218,10 @@ gh attestation verify "$PROMOTION" \
   --deny-self-hosted-runners >/dev/null \
   || fail "Milestone A promotion attestation verification failed"
 
+fi
+
 FORMULA="$TEMP_ROOT/agentplugins.rb"
-python3 - "$MANIFEST" "$FORMULA" <<'PY'
+python3 - "$MANIFEST" "$FORMULA" "$TEMP_ROOT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -184,6 +243,17 @@ mac_amd_url, mac_amd_sha = block("darwin", "amd64")
 linux_arm_url, linux_arm_sha = block("linux", "arm64")
 linux_amd_url, linux_amd_sha = block("linux", "amd64")
 
+notices = ""
+notice_file = Path(sys.argv[3]) / "THIRD_PARTY_NOTICES.txt"
+if notice_file.is_file():
+    import hashlib
+    notice_hash = hashlib.sha256(notice_file.read_bytes()).hexdigest()
+    notices = f"""
+  resource "third-party-notices" do
+    url "{base}/THIRD_PARTY_NOTICES.txt", using: :nounzip
+    sha256 "{notice_hash}"
+  end
+"""
 formula = f'''class Agentplugins < Formula
   desc "Universal installer and lifecycle manager for Agent Plugins 1.0"
   homepage "https://github.com/777genius/universal-agent-plugins"
@@ -210,10 +280,12 @@ formula = f'''class Agentplugins < Formula
     end
   end
 
+{notices}
   def install
     asset = Dir["agentplugins_*"].fetch(0)
     bin.install asset => "agentplugins"
     chmod 0755, bin/"agentplugins"
+{'    resource("third-party-notices").stage { prefix.install "THIRD_PARTY_NOTICES.txt" }' if notices else ''}
   end
 
   test do
@@ -236,8 +308,12 @@ if [[ "${CHECK_ONLY:-0}" == 1 ]]; then
 fi
 
 cp "$FORMULA" Formula/agentplugins.rb
-git config user.name "agentplugins-release"
-git config user.email "actions@users.noreply.github.com"
+git config user.name "iliya"
+git config user.email "iliyazelenkog@gmail.com"
+export GIT_AUTHOR_NAME=iliya GIT_AUTHOR_EMAIL=iliyazelenkog@gmail.com
+export GIT_COMMITTER_NAME=iliya GIT_COMMITTER_EMAIL=iliyazelenkog@gmail.com
+git var GIT_AUTHOR_IDENT
+git var GIT_COMMITTER_IDENT
 git add Formula/agentplugins.rb
 git diff --cached --quiet && fail "formula update produced no staged change"
 git commit -m "chore: update agentplugins to $VERSION"
