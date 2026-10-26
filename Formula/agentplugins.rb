@@ -1,32 +1,32 @@
 class Agentplugins < Formula
   desc "Universal installer and lifecycle manager for Agent Plugins 1.0"
   homepage "https://github.com/777genius/universal-agent-plugins"
-  version "0.1.91"
+  version "0.1.93"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.91/agentplugins_0.1.91_darwin_arm64", using: :nounzip
-      sha256 "15cc1cb54e1f60213fb08387031414df0083cfbcfe0b7afc499aa58e69899a9a"
+      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.93/agentplugins_0.1.93_darwin_arm64", using: :nounzip
+      sha256 "505296c4bc3a573cf2dc045f074fb6a169fc8a5b50b8f2a188a504fd34770c7e"
     else
-      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.91/agentplugins_0.1.91_darwin_amd64", using: :nounzip
-      sha256 "f494b2c3a77b75a6f32f1da0a346f5dadd37a7e7593506bafaf6c6fd00a5c226"
+      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.93/agentplugins_0.1.93_darwin_amd64", using: :nounzip
+      sha256 "43f06507edcf2f0f5b281bb4e2475db149be271ee3e5aa0d63cc02ef16bc910b"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.91/agentplugins_0.1.91_linux_arm64", using: :nounzip
-      sha256 "c16eb9853b192f803ead6ffce112f2322f14f049a04d9473df8e95a77e8fdc56"
+      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.93/agentplugins_0.1.93_linux_arm64", using: :nounzip
+      sha256 "b610de3568c3a9babe8faae039c464f2d98901dc53c014afc7b6b73bdd4e8faf"
     else
-      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.91/agentplugins_0.1.91_linux_amd64", using: :nounzip
-      sha256 "7cabae845789bff8691ddfc3888e43a2b66918a6606b2d9b68965c1df58a4626"
+      url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.93/agentplugins_0.1.93_linux_amd64", using: :nounzip
+      sha256 "af9b9519fa66ff5705f94c6cff20adb3c921acdcc41ed8087ef40f7327a07b50"
     end
   end
 
 
   resource "third-party-notices" do
-    url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.91/THIRD_PARTY_NOTICES.txt", using: :nounzip
+    url "https://github.com/777genius/universal-agent-plugins/releases/download/agentplugins-v0.1.93/THIRD_PARTY_NOTICES.txt", using: :nounzip
     sha256 "f19bbcef2085b8ec5c11e242130d9218260ad70552a077af0fe2093184c75bfb"
   end
 
