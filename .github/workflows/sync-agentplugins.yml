@@ -20,8 +20,8 @@ permissions:
   attestations: read
 
 concurrency:
-  group: sync-agentplugins-release
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('sync-agentplugins-pr-{0}', github.event.pull_request.number) || 'sync-agentplugins-release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sync:
